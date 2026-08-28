@@ -9,10 +9,10 @@
     ],
     "Description": "A dynamic, ultrawide-optimized tiling engine for KWin.",
     "License": "GPL-2.0-or-later",
-    "Icon": "preferences-system-windows-script-test",
+    "Icon": "preferences-system-windows",
     "Name": "fractal-grid",
     "Id": "fractal-grid",
-    "Version": 1.0,
+    "Version": "0.1.0",
     "EnabledByDefault": true
   },
   "X-Plasma-API": "javascript",

@@ -13,9 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   package id, shortcut prefix).
 - Corrected the code header license from MIT to GPL-2.0-or-later to match the
   GPL-2.0 upstream fork.
+- Set the package version to `0.1.0` and replaced the placeholder KWin icon.
 
 ### Added
 
 - Standard repository frame: AGENTS.md, CONTRIBUTING.md, SECURITY.md,
   CODE_OF_CONDUCT.md, LINEAGE.md, CHANGELOG.md, CODEOWNERS, rulesets, CI and
   release workflows, and a self-documenting Makefile.
+- Bound the `twoColWithRows` layout to default shortcuts.

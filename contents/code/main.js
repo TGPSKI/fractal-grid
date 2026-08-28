@@ -804,3 +804,12 @@ registerShortcut("TwoColHealthyMarginsRight", "fractal-grid: Two Column Healthy 
     twoColHealthyMargins(1);
 });
 
+// --- Two-Column Stack Layout (Ctrl+Alt+Meta + U/I) ---
+registerShortcut("TwoColWithRowsLeft", "fractal-grid: Two Column Stack Left", "Ctrl+Alt+Meta+U", function () {
+    twoColWithRows(0);
+});
+
+registerShortcut("TwoColWithRowsRight", "fractal-grid: Two Column Stack Right", "Ctrl+Alt+Meta+I", function () {
+    twoColWithRows(1);
+});
+

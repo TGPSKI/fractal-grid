@@ -63,6 +63,7 @@ cd fractal-grid
 | `Ctrl+Alt+Meta+J` | three-column center, takeover (span left + center) |
 | `Ctrl+Alt+Meta+D` / `B` / `H` | framed three-column — left / center / right |
 | `Ctrl+Alt+Meta+M` / `K` | framed two-column — left / right |
+| `Ctrl+Alt+Meta+U` / `I` | two-column stack — left / right |
 | `Ctrl+Alt+Meta+,` / `L` | two-column healthy margins — left / right |
 
 Every shortcut is `fractal-grid:`-prefixed and editable in System Settings >
