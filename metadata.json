@@ -7,11 +7,11 @@
         "Name": "Tyler Pate"
       }
     ],
-    "Description": "Move windows in useful positions in a ultrawide monitor",
-    "License": "GPL",
+    "Description": "A dynamic, ultrawide-optimized tiling engine for KWin.",
+    "License": "GPL-2.0-or-later",
     "Icon": "preferences-system-windows-script-test",
-    "Name": "FractalGrid",
-    "Id": "FractalGrid",
+    "Name": "fractal-grid",
+    "Id": "fractal-grid",
     "Version": 1.0,
     "EnabledByDefault": true
   },

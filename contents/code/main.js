@@ -1,15 +1,15 @@
 /**
- * FractalGrid - KWin Script for Ultrawide Monitor Window Management
- * 
+ * fractal-grid — KWin script for ultrawide monitor window management.
+ *
  * A grid-based window layout manager for KDE Plasma that enables advanced
  * window positioning on ultrawide monitors. Provides customizable column layouts
  * with smart stacking, takeover modes, and keyboard shortcuts.
- * 
- * @author TGPSKI (FractalGrid), lucmos (UltrawideWindows)
- * @license MIT
- * @see https://github.com/lucmos/FractalGrid
- * @see https://github.com/TGPSKI/UltrawideWindows
- * 
+ *
+ * @author Tyler Pate (TGPSKI), forked from lucmos (UltrawideWindows)
+ * @license GPL-2.0-or-later
+ * @see https://github.com/lucmos/UltrawideWindows
+ * @see https://github.com/TGPSKI/fractal-grid
+ *
  * Key Features:
  * - Percentage-based column width distribution
  * - Smart stacking: automatic window arrangement within columns
@@ -752,55 +752,55 @@ workspace.virtualScreenSizeChanged.connect(recalculateAllGeometry);
 // =============================================================================
 // KEYBOARD SHORTCUTS
 // =============================================================================
-// All shortcuts use the "FractalGrid:" prefix for discoverability in KDE settings.
+// All shortcuts use the "fractal-grid:" prefix for discoverability in KDE settings.
 // Customize key bindings in System Settings > Shortcuts > KWin
 // =============================================================================
 
 // --- Framed Three-Column Layout (Ctrl+Alt+Meta + D/B/H) ---
-registerShortcut("ThreeColFramedLeft", "FractalGrid: ThreeCol Framed Place Left", "Ctrl+Alt+Meta+D", function () {
+registerShortcut("ThreeColFramedLeft", "fractal-grid: ThreeCol Framed Place Left", "Ctrl+Alt+Meta+D", function () {
     framedThreeCol(0);
 });
 
-registerShortcut("ThreeColFramedCenter", "FractalGrid: ThreeCol Framed Place Center", "Ctrl+Alt+Meta+B", function () {
+registerShortcut("ThreeColFramedCenter", "fractal-grid: ThreeCol Framed Place Center", "Ctrl+Alt+Meta+B", function () {
     framedThreeCol(1);
 });
 
-registerShortcut("ThreeColFramedRight", "FractalGrid: ThreeCol Framed Place Right", "Ctrl+Alt+Meta+H", function () {
+registerShortcut("ThreeColFramedRight", "fractal-grid: ThreeCol Framed Place Right", "Ctrl+Alt+Meta+H", function () {
     framedThreeCol(2);
 });
 
 // --- Standard Three-Column Layout (Ctrl+Alt+Meta + E/C/T/R) ---
-registerShortcut("ThreeColLeft", "FractalGrid: ThreeCol Place Left", "Ctrl+Alt+Meta+E", function () {
+registerShortcut("ThreeColLeft", "fractal-grid: ThreeCol Place Left", "Ctrl+Alt+Meta+E", function () {
     threeCol(0);
 });
 
-registerShortcut("ThreeColCenter", "FractalGrid: ThreeCol Place Center", "Ctrl+Alt+Meta+C", function () {
+registerShortcut("ThreeColCenter", "fractal-grid: ThreeCol Place Center", "Ctrl+Alt+Meta+C", function () {
     threeCol(1);
 });
 
-registerShortcut("ThreeColRight", "FractalGrid: ThreeCol Place Right", "Ctrl+Alt+Meta+T", function () {
+registerShortcut("ThreeColRight", "fractal-grid: ThreeCol Place Right", "Ctrl+Alt+Meta+T", function () {
     threeCol(2);
 });
 
-registerShortcut("ThreeColCenterTakeover", "FractalGrid: ThreeCol Center Takeover", "Ctrl+Alt+Meta+J", function () {
+registerShortcut("ThreeColCenterTakeover", "fractal-grid: ThreeCol Center Takeover", "Ctrl+Alt+Meta+J", function () {
     threeCol(1, { takeover: true });
 });
 
 // --- Two-Column Framed Layout (Ctrl+Alt+Meta + M/K) ---
-registerShortcut("TwoColFramedLeft", "FractalGrid: Two Column With Rows Left", "Ctrl+Alt+Meta+M", function () {
+registerShortcut("TwoColFramedLeft", "fractal-grid: Two Column Framed Left", "Ctrl+Alt+Meta+M", function () {
     twoColWithRowsFramed(0);
 });
 
-registerShortcut("TwoColFramedRight", "FractalGrid: Two Column With Rows Right", "Ctrl+Alt+Meta+K", function () {
+registerShortcut("TwoColFramedRight", "fractal-grid: Two Column Framed Right", "Ctrl+Alt+Meta+K", function () {
     twoColWithRowsFramed(1);
 });
 
 // --- Two-Column Healthy Margins Layout (Ctrl+Alt+Meta + ,/L) ---
-registerShortcut("TwoColHealthyMarginsLeft", "FractalGrid: Two Column Healthy Margins Left", "Ctrl+Alt+Meta+,", function () {
+registerShortcut("TwoColHealthyMarginsLeft", "fractal-grid: Two Column Healthy Margins Left", "Ctrl+Alt+Meta+,", function () {
     twoColHealthyMargins(0);
 });
 
-registerShortcut("TwoColHealthyMarginsRight", "FractalGrid: Two Column Healthy Margins Right", "Ctrl+Alt+Meta+L", function () {
+registerShortcut("TwoColHealthyMarginsRight", "fractal-grid: Two Column Healthy Margins Right", "Ctrl+Alt+Meta+L", function () {
     twoColHealthyMargins(1);
 });
 

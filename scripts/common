@@ -1,2 +1,2 @@
-package_name="FractalGrid"
+package_name="fractal-grid"
 package_archive="${package_name}.kwinscript"
