@@ -1,16 +1,147 @@
-function newSlotPosition(workspace, client, numberXslots, numberYslots, x, y, xSlotToFill, ySlotToFill) {
-    var maxArea = workspace.clientArea(KWin.MaximizeArea, client);
+/**
+ * FractalGrid - KWin Script for Ultrawide Monitor Window Management
+ * 
+ * A grid-based window layout manager for KDE Plasma that enables advanced
+ * window positioning on ultrawide monitors. Provides customizable column layouts
+ * with smart stacking, takeover modes, and keyboard shortcuts.
+ * 
+ * @author TGPSKI (FractalGrid), lucmos (UltrawideWindows)
+ * @license MIT
+ * @see https://github.com/lucmos/FractalGrid
+ * @see https://github.com/TGPSKI/UltrawideWindows
+ * 
+ * Key Features:
+ * - Percentage-based column width distribution
+ * - Smart stacking: automatic window arrangement within columns
+ * - Takeover mode: expand windows across multiple columns
+ * - Frame margins: create layouts that don't maximize full screen
+ * - Per-column padding and row configuration
+ * 
+ * KWin API Dependencies:
+ * - workspace.activeWindow, workspace.windowList(), workspace.currentDesktop
+ * - workspace.clientArea(), workspace.activeScreen, workspace.currentActivity
+ * - KWin.MaximizeArea, registerShortcut()
+ */
 
-    var newX = maxArea.x + Math.round(maxArea.width / numberXslots * x);
-    var newY = maxArea.y + Math.round(maxArea.height / numberYslots * y);
+const debug = false;
 
-    // Width and height is calculated by finding where the window should end and subtracting where it should start
-    var clientWidth = Math.round(maxArea.width / numberXslots * (x + xSlotToFill)) - (newX - maxArea.x);
-    var clientHeight = Math.round(maxArea.height / numberYslots * (y + ySlotToFill)) - (newY - maxArea.y);
-
-    return [newX, newY, clientWidth, clientHeight]
+/**
+ * Log debug messages when debug mode is enabled.
+ * @param {...any} args - Arguments to log
+ */
+function logDebug(...args) {
+    if (debug) {
+        console.log(...args);
+    }
 }
 
+/**
+ * Safely stringify an object for debug logging.
+ * Falls back to a simple representation if JSON.stringify fails.
+ * @param {any} obj - The object to stringify
+ * @returns {string} JSON string or fallback representation
+ */
+function safeJsonStringify(obj) {
+    try {
+        return JSON.stringify(obj);
+    } catch (e) {
+        return String(obj);
+    }
+}
+
+/**
+ * Get the active window client with validation.
+ * @returns {object|null} The active client if valid and manipulable, null otherwise
+ */
+function getActiveClient() {
+    const client = workspace.activeWindow;
+    if (!client || !client.moveable || !client.resizeable) {
+        return null;
+    }
+    return client;
+}
+
+/**
+ * Get the current desktop number, supporting both X11 and Wayland APIs.
+ * @returns {number|null} The current desktop number or null if unavailable
+ */
+function getCurrentDesktopNum() {
+    const currentDesktop = workspace.currentDesktop;
+    if (typeof currentDesktop === 'number') {
+        return Number(currentDesktop);
+    } else if (currentDesktop && typeof currentDesktop.x11DesktopNumber !== 'undefined') {
+        return Number(currentDesktop.x11DesktopNumber);
+    } else if (currentDesktop && typeof currentDesktop.number !== 'undefined') {
+        return Number(currentDesktop.number);
+    }
+    return null;
+}
+
+/**
+ * Determine if a window should be considered on the current desktop.
+ * Returns an exclude reason string if the window should be excluded, or null if it should be included.
+ * 
+ * KWin 6 API: window.desktops is an array of VirtualDesktop objects.
+ * Each VirtualDesktop has x11DesktopNumber property.
+ * If window.desktops is empty AND window.onAllDesktops is false, the window is NOT on all desktops
+ * (contrary to older behavior). We must check the desktops array properly.
+ * 
+ * @param {object} window - The window object to check
+ * @param {number|null} currentDeskNum - The current desktop's x11DesktopNumber
+ * @returns {string|null} Exclude reason or null if window is on current desktop
+ */
+function isWindowOnCurrentDesktop(window, currentDeskNum) {
+    // Check onAllDesktops first - sticky windows should be excluded from collision detection
+    if (window.onAllDesktops) {
+        return 'onAllDesktops';
+    }
+
+    // Check window.desktops array (KWin 6 API: array of VirtualDesktop objects)
+    const windowDesktops = window.desktops;
+    if (windowDesktops && typeof windowDesktops.length === 'number' && windowDesktops.length > 0) {
+        // Window is assigned to specific desktops - check if current desktop is in the list
+        let foundOnCurrentDesktop = false;
+        for (let i = 0; i < windowDesktops.length; i++) {
+            const vd = windowDesktops[i];
+            if (vd && typeof vd.x11DesktopNumber !== 'undefined') {
+                if (vd.x11DesktopNumber === currentDeskNum) {
+                    foundOnCurrentDesktop = true;
+                    break;
+                }
+            }
+        }
+        if (!foundOnCurrentDesktop) {
+            return 'desktop-mismatch';
+        }
+    }
+
+    // If we get here, either:
+    // - Window's desktops array is empty (shouldn't happen for normal windows)
+    // - Window is on the current desktop
+    // In either case, we've passed the desktop check
+    return null;
+}
+
+/**
+ * Check if two geometries overlap.
+ * @param {object} geom1 - First geometry {x, y, width, height}
+ * @param {object} geom2 - Second geometry {x, y, width, height}
+ * @returns {boolean} True if the geometries overlap
+ */
+function geometryOverlaps(geom1, geom2) {
+    const horizontalOverlap = (geom1.x < geom2.x + geom2.width) && (geom1.x + geom1.width > geom2.x);
+    const verticalOverlap = (geom1.y < geom2.y + geom2.height) && (geom1.y + geom1.height > geom2.y);
+    return horizontalOverlap && verticalOverlap;
+}
+
+/**
+ * Reposition and resize a window to the specified geometry.
+ * @param {object} client - The KWin window client object
+ * @param {number} newX - New X position (left edge)
+ * @param {number} newY - New Y position (top edge)
+ * @param {number} w - New width in pixels
+ * @param {number} h - New height in pixels
+ */
 function reposition(client, newX, newY, w, h) {
     client.frameGeometry = {
         x: newX,
@@ -20,433 +151,656 @@ function reposition(client, newX, newY, w, h) {
     }
 }
 
-function move(workspace, numberXslots, numberYslots, x, y, xSlotToFill, ySlotToFill) {
-    var client = workspace.activeWindow;
-    if (client.moveable && client.resizeable) {
-        client.setMaximize(false,false);
-        arr = newSlotPosition(workspace, client, numberXslots, numberYslots, x, y, xSlotToFill, ySlotToFill);
-        var newX = arr[0],
-            newY = arr[1],
-            w = arr[2],
-            h = arr[3];
-        reposition(client, newX, newY, w, h)
-    }
-}
+/**
+ * Collect all windows whose frameGeometry overlaps the provided column geometry.
+ * Filters out minimized, hidden, and windows on other desktops/activities.
+ * @param {object} columnGeom - The column geometry {x, y, width, height}
+ * @returns {Array} Array of window objects that overlap with the column
+ */
+function collectWindowsInColumn(columnGeom) {
+    const allWindows = workspace.windowList ? workspace.windowList() : [];
+    logDebug("Total windows from workspace.windowList:", allWindows.length);
 
-function center(workspace) {
-    var client = workspace.activeWindow;
-    if (client.moveable) {
-        var maxArea = workspace.clientArea(KWin.MaximizeArea, client);
-        var newX = Math.round(maxArea.x + ((maxArea.width - client.width) / 2));
-        var newY = Math.round(maxArea.y + ((maxArea.height - client.height) / 2));
-        reposition(client, newX, newY, client.width, client.height)
-    }
-}
+    const currentDeskNum = getCurrentDesktopNum();
+    const included = [];
+    const excluded = [];
 
-function ensureWithinVisibleArea(client, new_w, new_h, old_w, old_h, old_x, old_y) {
-    var new_x, new_y;
-    var maxArea = workspace.clientArea(KWin.MaximizeArea, client);
-    var ratio = new_w / new_h;
+    const result = allWindows.filter(window => {
+        // Skip invalid windows and desktop background
+        if (!window || !window.frameGeometry || window.desktopWindow) return false;
 
-    var diff_x = old_w - new_w,
-        diff_y = old_h - new_h;
+        let excludeReason = null;
 
-    // Calculate a new x and y that will keep the position
-    // of the window centered with respect to its previous
-    // position
-    new_x = old_x + Math.round(diff_x / 2);
-    new_y = old_y + Math.round(diff_y / 2);
+        // Check visibility (minimized/hidden)
+        if (window.minimized) excludeReason = 'minimized';
+        if (!excludeReason && window.hidden) excludeReason = 'hidden';
 
-    // Ensure the newly calculate position is within the boundaries
-    // of the visible desktop area
-    if (new_y + new_h > maxArea.bottom) {
-        new_y = new_y - ((new_y + new_h) - maxArea.bottom);
-    }
-    if (new_x + new_w > maxArea.right) {
-        new_x = new_x - ((new_x + new_w) - maxArea.right);
-    }
-
-    // Also ensure that new_x and new_y is never less than 0
-    new_x = new_x < 0 ? 0 : new_x;
-    new_y = new_y < 0 ? 0 : new_y;
-
-    return {"x": new_x, "y": new_y, "w": new_w, "h": new_h};
-}
-
-function calcShrink(client, decStepPx, minSizePx) {
-    var geom = client.frameGeometry;
-    var maxArea = workspace.clientArea(KWin.MaximizeArea, client);
-
-    var ratio = geom.width / geom.height;
-    var new_w, new_h;
-    var new_xywh = {"x": geom.x, "y": geom.y, "w": geom.width, "h": geom.height};
-
-    // Ensure the minSizePx is smaller than maxArea width/height
-    minSizePx = minSizePx > maxArea.width ? maxArea.width : minSizePx;
-    minSizePx = minSizePx > maxArea.height ? maxArea.height : minSizePx;
-
-    if (client.moveable && client.resizeable) {
-        if (ratio >= 1) {
-            // Width >= Height
-            new_w = geom.width - decStepPx;
-            new_w = new_w < minSizePx ? minSizePx : new_w;
-            new_h = Math.round(new_w / ratio);
-
-            if (new_h > maxArea.height) {
-                new_h = maxArea.height
-                new_w = Math.round(new_h * ratio);
-            }
-        } else {
-            // Height > Width
-            new_h = geom.height - decStepPx;
-            new_h = new_h < minSizePx ? minSizePx : new_h;
-            new_w = Math.round(new_h * ratio);
-
-            if (new_w > maxArea.width) {
-                new_w = maxArea.width
-                new_h = Math.round(new_w / ratio);
-            }
+        // Check desktop membership
+        if (!excludeReason) {
+            excludeReason = isWindowOnCurrentDesktop(window, currentDeskNum);
         }
 
-        new_xywh = ensureWithinVisibleArea(client, new_w, new_h, geom.width, geom.height, geom.x, geom.y)
-    }
-
-    return {"x": new_xywh.x, "y": new_xywh.y, "w": new_xywh.w, "h": new_xywh.h};
-}
-
-function calcGrow(client, incStepPx) {
-    var geom = client.frameGeometry;
-    var maxArea = workspace.clientArea(KWin.MaximizeArea, client);
-
-    var ratio = geom.width / geom.height;
-    var new_w, new_h;
-    var new_xywh = {"x": geom.x, "y": geom.y, "w": geom.width, "h": geom.height};
-
-    if (client.moveable && client.resizeable) {
-        if (ratio >= 1) {
-            // Width >= Height
-            new_w = geom.width + incStepPx;
-            new_w = new_w > maxArea.width ? maxArea.width : new_w;
-            new_h = Math.round(new_w / ratio);
-
-            if (new_h > maxArea.height) {
-                new_h = maxArea.height
-                new_w = Math.round(new_h * ratio);
+        // Log window properties in debug mode
+        if (debug) {
+            // Extract desktop numbers from window.desktops array for logging
+            let desktopNums = [];
+            if (window.desktops && typeof window.desktops.length === 'number') {
+                for (let i = 0; i < window.desktops.length; i++) {
+                    const vd = window.desktops[i];
+                    if (vd && typeof vd.x11DesktopNumber !== 'undefined') {
+                        desktopNums.push(vd.x11DesktopNumber);
+                    }
+                }
             }
-        } else {
-            // Height > Width
-            new_h = geom.height + incStepPx;
-            new_h = new_h > maxArea.height ? maxArea.height : new_h;
-            new_w = Math.round(new_h * ratio);
-
-            if (new_w > maxArea.width) {
-                new_w = maxArea.width
-                new_h = Math.round(new_w / ratio);
-            }
+            logDebug("Window properties: " + safeJsonStringify({
+                caption: window.caption || '<no-caption>',
+                desktops: desktopNums,
+                onAllDesktops: window.onAllDesktops,
+                minimized: window.minimized,
+                hidden: window.hidden,
+                activities: window.activities,
+                frame: window.frameGeometry,
+            }));
         }
 
-        new_xywh = ensureWithinVisibleArea(client, new_w, new_h, geom.width, geom.height, geom.x, geom.y)
+        // Check geometric overlap
+        const overlapped = geometryOverlaps(window.frameGeometry, columnGeom);
+
+        if (excludeReason || !overlapped) {
+            excluded.push({ window, reason: excludeReason || 'no-overlap' });
+            return false;
+        }
+
+        included.push(window);
+        return true;
+    });
+
+    // Log summary in debug mode
+    if (debug) {
+        logDebug("collectWindowsInColumn: currentDesktop:", safeJsonStringify({
+            raw: workspace.currentDesktop,
+            num: currentDeskNum
+        }));
+        logDebug("Included windows:", safeJsonStringify(
+            included.map(w => ({ caption: w.caption || '<no-caption>', desktop: w.desktop }))
+        ));
+        logDebug("Excluded windows:", safeJsonStringify(
+            excluded.map(e => ({ caption: e.window.caption || '<no-caption>', desktop: e.window.desktop, reason: e.reason }))
+        ));
     }
 
-    return {"x": new_xywh.x, "y": new_xywh.y, "w": new_xywh.w, "h": new_xywh.h};
+    return result;
 }
 
-function resize(workspace, action, incStepPx, minSizePx) {
-    var client = workspace.activeWindow;
+/**
+ * Validate and adjust column widths to fit the available screen width.
+ * If total width is less than available, distributes excess proportionally.
+ * @param {number[]} colWidths - Array of column widths in pixels
+ * @param {number} horizMargin - Horizontal margin between columns
+ * @param {number} maxWidth - Maximum available width
+ * @returns {number[]} Adjusted column widths
+ * @throws {Error} If columns plus margins exceed available width
+ */
+function validateColumnWidths(colWidths, horizMargin, maxWidth) {
+    // Calculate total width including margins on both sides of each column
+    let totalWidth = colWidths.reduce((sum, width) => sum + width, 0) + (colWidths.length + 1) * horizMargin;
 
-    if (client.moveable && client.resizeable) {
-        var newGeom;
+    if (totalWidth > maxWidth) {
+        throw new Error("Column widths plus margins exceed the available screen width.");
+    }
 
-        if (action == "shrink") {
-            newGeom =  calcShrink(client, incStepPx, minSizePx);
-        } else if (action == "grow") {
-            newGeom = calcGrow(client, incStepPx);
+    // Distribute any remaining width proportionally to existing column widths
+    if (totalWidth < maxWidth) {
+        const remainingWidth = maxWidth - totalWidth;
+        const weights = colWidths;
+        const sum = weights.reduce((a,b) => a+b, 0);
+
+        for (let i = 0; i < colWidths.length; i++) {
+            colWidths[i] += Math.round(remainingWidth * (weights[i] / sum));
+        }
+    }
+
+    return colWidths;
+}
+
+/**
+ * Calculate the X positions for each column based on widths and margins.
+ * @param {number[]} colWidths - Array of column widths in pixels
+ * @param {number} horizMargin - Horizontal margin between columns
+ * @returns {number[]} Array of X positions for each column's left edge
+ */
+function calculateColumnPositions(colWidths, horizMargin) {
+    const positions = [];
+    let currentPosition = horizMargin;  // Start after left margin
+
+    colWidths.forEach(width => {
+        positions.push(currentPosition);
+        currentPosition += width + horizMargin;  // Move past column and margin
+    });
+
+    return positions;
+}
+
+// =============================================================================
+// GLOBAL SCREEN GEOMETRY
+// =============================================================================
+// Cached screen geometry, calculated once and updated on screen size changes.
+// All layout generators reference this shared value.
+// =============================================================================
+
+/** @type {{x: number, y: number, width: number, height: number}} */
+let globalMaxArea = null;
+
+/**
+ * Calculate and cache the global screen geometry.
+ * Called at initialization and when screen size changes.
+ */
+function updateGlobalMaxArea() {
+    globalMaxArea = workspace.clientArea(KWin.MaximizeArea, workspace.activeScreen, workspace.currentDesktop);
+    logDebug("Global maxArea updated:", safeJsonStringify({
+        x: globalMaxArea.x, y: globalMaxArea.y,
+        width: globalMaxArea.width, height: globalMaxArea.height
+    }));
+}
+
+// Initialize global geometry
+updateGlobalMaxArea();
+
+/**
+ * Factory function that creates a grid layout placement function.
+ * 
+ * The generated function positions windows into a configurable column-based grid.
+ * Each column can have its own width percentage, takeover capability, and row behavior.
+ * 
+ * ALL MEASUREMENTS ARE IN PERCENTAGES relative to screen dimensions:
+ * - Horizontal values (horizMargin, frameHorizMargin, columnPadding) are % of screen WIDTH
+ * - Vertical values (vertMargin, frameVertMargin, rowVertMargin, minWindowHeight) are % of screen HEIGHT
+ * 
+ * @param {number} columns - Number of columns in the grid (default: 3)
+ * @param {object} style - Layout configuration options (all values in percentages):
+ * 
+ * @param {number} style.horizMarginPct - Horizontal margin between columns as % of screen width (default: 1.3)
+ * @param {number} style.vertMarginPct - Vertical margin from top/bottom of frame as % of screen height (default: 2.6)
+ * @param {number[]} style.columnWidthPercentages - Width distribution as percentages, must sum to ~100
+ *   Example: [29, 57, 12] creates a narrow-wide-narrow layout
+ * 
+ * @param {number[]} style.enableTakeover - Per-column takeover mode flags (0=disabled, 1=enabled)
+ *   When enabled, { takeover: true } option expands window to include adjacent column(s)
+ *   Columns 0 and 1 both expand to cover columns 0+1 when takeover is triggered
+ * 
+ * @param {number[]} style.enableRows - Per-column smart stacking configuration:
+ *   - 0: Disabled - window fills entire column height
+ *   - 1+: Enabled - triggers smart stacking algorithm (see stackInColumn):
+ *     * Empty column: new window fills entire height
+ *     * Full-height window exists: split column in half (if minWindowHeight allows)
+ *     * Partial windows exist: append below bottom-most window (if space allows)
+ *   The number value is also used by computeRowGeometry for explicit row placement
+ * 
+ * @param {number} style.rowVertMarginPct - Vertical margin between stacked windows as % of screen height (default: 1.0)
+ * @param {number} style.minWindowHeightPct - Minimum window height as % of screen height (default: 5.2)
+ *   Smart stacking operations that would violate this constraint are skipped
+ * 
+ * @param {number} style.frameHorizMarginPct - Horizontal inset from screen edges as % of screen width (default: 0)
+ *   Creates a "frame" within the screen where all columns are laid out
+ * @param {number} style.frameVertMarginPct - Vertical inset from screen edges as % of screen height (default: 0)
+ * 
+ * @param {number[]|false} style.columnPaddingPct - Per-column vertical padding as % of screen height (default: false)
+ *   When array, each value is applied as top AND bottom padding for that column
+ *   Example: [3.9, 0, 3.9] adds ~75px padding on 1920px height to columns 0 and 2
+ * 
+ * @returns {function} place(columnIndex, options) - Window placement function
+ *   - place(columnIndex): Place active window in specified column
+ *   - place(columnIndex, { takeover: true }): Place with takeover expansion
+ *   - place(columnIndex, { row: N }): Place in specific row (when rows disabled)
+ *   - place.getColumnGeometry(columnIndex): Get column bounds {x, y, width, height}
+ *   - place.style: Reference to the style configuration
+ *   - place.columns: Number of columns
+ *   - place.recalculateGeometry(): Manually trigger geometry recalculation
+ */
+function gridLayoutGenerator(
+    columns = 3,
+    style = {
+        horizMarginPct: 1.3,           // ~50px on 3840px width
+        vertMarginPct: 2.6,            // ~50px on 1920px height
+        columnWidthPercentages: [29, 57, 12],
+        enableTakeover: [1, 1, 0],
+        enableRows: [0, 0, 1],
+        rowVertMarginPct: 1.6,         // ~30px on 1920px height
+        minWindowHeightPct: 5.2,       // ~100px on 1920px height
+        frameHorizMarginPct: 0,  
+        frameVertMarginPct: 0,  
+        columnPaddingPct: false   
+    }
+) {
+    // Validate style configuration upfront
+    if (style.columnWidthPercentages.length !== columns) {
+        throw new Error("columnWidthPercentages length must equal columns");
+    }
+
+    // Cached layout-specific geometry - recalculated on screen size changes
+    let frameArea, colWidths, colPositions;
+    // Computed pixel values from percentages (recalculated on screen size change)
+    let horizMargin, vertMargin, rowVertMargin, minWindowHeight, frameHorizMargin, frameVertMargin, columnPadding;
+
+    /**
+     * Recalculate layout-specific geometry based on global maxArea.
+     * Converts percentage-based style values to pixels based on current screen dimensions.
+     * Called at initialization and when screen size changes.
+     */
+    function recalculateGeometry() {
+        const screenWidth = globalMaxArea.width;
+        const screenHeight = globalMaxArea.height;
+        
+        // Convert percentage values to pixels
+        horizMargin = Math.round(screenWidth * (style.horizMarginPct / 100));
+        vertMargin = Math.round(screenHeight * (style.vertMarginPct / 100));
+        rowVertMargin = Math.round(screenHeight * (style.rowVertMarginPct / 100));
+        minWindowHeight = Math.round(screenHeight * (style.minWindowHeightPct / 100));
+        frameHorizMargin = Math.round(screenWidth * (style.frameHorizMarginPct / 100));
+        frameVertMargin = Math.round(screenHeight * (style.frameVertMarginPct / 100));
+        
+        // Convert column padding percentages to pixels
+        if (style.columnPaddingPct && Array.isArray(style.columnPaddingPct)) {
+            columnPadding = style.columnPaddingPct.map(p => Math.round(screenHeight * (p / 100)));
         } else {
-            print("Please choose an action between 'shrink' and 'grow'");
+            columnPadding = false;
+        }
+        
+        // Calculate frame area (layout area within frame margins)
+        frameArea = {
+            x: globalMaxArea.x + frameHorizMargin,
+            y: globalMaxArea.y + frameVertMargin,
+            width: screenWidth - 2 * frameHorizMargin,
+            height: screenHeight - 2 * frameVertMargin
+        };
+        
+        const totalWidth = frameArea.width - (columns + 1) * horizMargin;
+        colWidths = style.columnWidthPercentages.map(p => Math.round(totalWidth * (p / 100)));
+        validateColumnWidths(colWidths, horizMargin, frameArea.width);
+        colPositions = calculateColumnPositions(colWidths, horizMargin);
+        
+        logDebug("Layout geometry recalculated:", safeJsonStringify({
+            screenSize: { width: screenWidth, height: screenHeight },
+            frameArea: { width: frameArea.width, height: frameArea.height },
+            margins: { horiz: horizMargin, vert: vertMargin, rowVert: rowVertMargin },
+            colWidths: colWidths
+        }));
+    }
+
+    // Initial geometry calculation
+    recalculateGeometry();
+    
+    function getAdjustedColumnHeight(columnIndex) {
+        let height = frameArea.height - 2 * vertMargin;
+        if (columnPadding && Array.isArray(columnPadding) && columnIndex < columnPadding.length) {
+            height -= 2 * columnPadding[columnIndex];
+        }
+        return height;
+    }
+
+    function computeRowGeometry(columnIndex, rowIndex, columnHeight) {
+        const rowsEnabled = style.enableRows[columnIndex];
+        if (!rowsEnabled) {
+            return { y: frameArea.y + vertMargin, height: columnHeight };
+        }
+        const usableHeight = columnHeight - (rowsEnabled - 1) * rowVertMargin;
+        const eachHeight = Math.floor(usableHeight / rowsEnabled);
+        const y = frameArea.y + vertMargin + rowIndex * (eachHeight + rowVertMargin);
+        return { y: y, height: eachHeight };
+    }
+
+    function takeoverWidth(columnIndex) {
+        if (!style.enableTakeover[columnIndex]) return colWidths[columnIndex];
+        if (columnIndex === 0 && columns > 1) {
+            return colWidths[0] + colWidths[1] + horizMargin;
+        }
+        if (columnIndex === 1 && columns > 1) {
+            return colWidths[0] + colWidths[1] + horizMargin;
+        }
+        return colWidths[columnIndex];
+    }
+
+    function getColumnGeometry(columnIndex) {
+        const baseY = frameArea.y + vertMargin;
+        const baseHeight = frameArea.height - 2 * vertMargin;
+        let y = baseY;
+        let height = baseHeight;
+        if (columnPadding && Array.isArray(columnPadding) && columnIndex < columnPadding.length) {
+            const pad = columnPadding[columnIndex];
+            y += pad;
+            height -= 2 * pad;
+        }
+        return {
+            x: frameArea.x + colPositions[columnIndex],
+            y: y,
+            width: colWidths[columnIndex],
+            height: height
+        };
+    }
+
+    function place(columnIndex, options = {}) {
+        const activeClient = getActiveClient();
+        if (!activeClient) return;
+
+        activeClient.setMaximize(false, false);
+        if (columnIndex < 0 || columnIndex >= columns) throw new Error("Invalid columnIndex");
+
+        const takeover = options.takeover === true;
+        const rowsEnabled = style.enableRows[columnIndex];
+
+        // If rows are enabled for this column and no explicit row index, use smart stacking
+        if (rowsEnabled && !takeover) {
+            stackInColumn(columnIndex);
             return;
         }
 
-        // print(client.resourceName, JSON.stringify(newGeom));
-
-        reposition(client, newGeom.x, newGeom.y, newGeom.w, newGeom.h);
+        // Standard placement logic
+        const rowIndex = typeof options.row === 'number' ? options.row : 0;
+        const columnX = frameArea.x + colPositions[columnIndex];
+        const columnHeight = getAdjustedColumnHeight(columnIndex);
+        const rowGeom = computeRowGeometry(columnIndex, rowIndex, columnHeight);
+        let w = takeover ? takeoverWidth(columnIndex) : colWidths[columnIndex];
+        let x = columnX;
+        if (takeover && (columnIndex === 1)) {
+            x = frameArea.x + colPositions[0];
+        }
+        reposition(activeClient, x, rowGeom.y, w, rowGeom.height);
     }
-}
 
-function moveWithFixedSize(workspace, moveDirection, movePx) {
-    var client = workspace.activeWindow;
-    var geom = client.frameGeometry;
-    var x = geom.x,
-        y = geom.y;
-    if (client.moveable) {
-        if (moveDirection == "left") {
-            x = geom.x - movePx;
-        } else if (moveDirection == "right") {
-            x = geom.x + movePx;
-        } else if (moveDirection == "up") {
-            y = geom.y - movePx;
-        } else if (moveDirection == "down") {
-            y = geom.y + movePx;
-        } else {
-            print("Please choose a move direction between 'left', 'right', 'up' and 'down'");
+    /**
+     * Smart stacking algorithm for placing windows in a column.
+     * 
+     * Algorithm behavior:
+     * 1. EMPTY COLUMN: Place window to fill entire column height
+     * 2. FULL-HEIGHT WINDOW EXISTS: Split the column in half vertically
+     *    - Resize existing window to top half
+     *    - Place new window in bottom half
+     *    - Skipped if half-height < minWindowHeight
+     * 3. PARTIAL WINDOWS EXIST: Append below the bottom-most window
+     *    - Calculate remaining space below existing windows
+     *    - Place new window in remaining space
+     *    - Skipped if remaining height < minWindowHeight
+     * 
+     * @param {number} columnIndex - Index of the column to stack into
+     */
+    function stackInColumn(columnIndex) {
+        const activeClient = getActiveClient();
+        if (!activeClient) return;
+
+        const columnGeom = getColumnGeometry(columnIndex);
+        // Use computed pixel values from recalculateGeometry()
+        const stackRowVertMargin = rowVertMargin;
+        const stackMinWindowHeight = minWindowHeight;
+
+        // Collect windows that overlap with this column's geometry.
+        // This filters out: minimized, hidden, other desktops/activities, non-overlapping
+        const overlappingWindows = collectWindowsInColumn(columnGeom);
+        logDebug("Overlapping windows count:", overlappingWindows.length);
+
+        // Exclude the active client from collision detection
+        // (we're placing it, not detecting collision with it)
+        const columnWindows = overlappingWindows.filter(c => {
+            return c !== activeClient;
+        });
+
+        logDebug(`Found ${columnWindows.length} windows in column ${columnIndex}`);
+
+        // CASE 1: Empty column - fill entire height
+        if (columnWindows.length === 0) {
+            logDebug("No windows in column, filling entire space");
+            reposition(activeClient, columnGeom.x, columnGeom.y, columnGeom.width, columnGeom.height);
             return;
         }
-        new_xy = ensureWithinVisibleArea(client, geom.width, geom.height, geom.width, geom.height, x, y);
-        reposition(client, new_xy.x, new_xy.y, geom.width, geom.height);
+
+        // CASE 2: Check for full-height window (within 5px tolerance for rounding)
+        // If found, we'll split the column in half
+        const fullHeightWindow = columnWindows.find(c => {
+            const g = c.frameGeometry;
+            return Math.abs(g.y - columnGeom.y) <= 5 &&
+                   Math.abs(g.height - columnGeom.height) <= 5;
+        });
+
+        if (fullHeightWindow) {
+            // Split logic: resize existing window to half, place new window in other half
+            const halfHeight = Math.floor((columnGeom.height - stackRowVertMargin) / 2);
+            
+            // Check if half height meets minimum requirements
+            if (halfHeight < stackMinWindowHeight) {
+                logDebug("Cannot split: half height would be less than minWindowHeight");
+                return; // Do nothing if constraints can't be satisfied
+            }
+            
+            logDebug("Full-height window found, splitting column");
+            // Resize existing window to top half
+            reposition(fullHeightWindow,
+                       columnGeom.x,
+                       columnGeom.y,
+                       columnGeom.width,
+                       halfHeight);
+
+            // Place new window in bottom half
+            reposition(activeClient,
+                       columnGeom.x,
+                       columnGeom.y + halfHeight + stackRowVertMargin,
+                       columnGeom.width,
+                       halfHeight);
+            return;
+        }
+
+        // CASE 3: Partial windows exist - append new window to fill remaining space
+        logDebug("Appending window at bottom of column");
+        // Sort by Y position to find the bottom-most window
+        columnWindows.sort((a, b) => a.frameGeometry.y - b.frameGeometry.y);
+
+        let totalUsedHeight = 0;
+        columnWindows.forEach(c => {
+            totalUsedHeight += c.frameGeometry.height + stackRowVertMargin;
+        });
+
+        const remainingHeight = columnGeom.height - totalUsedHeight;
+
+        // Check if remaining height meets minimum requirements
+        if (remainingHeight < stackMinWindowHeight) {
+            logDebug("Cannot append: remaining height would be less than minWindowHeight");
+            return; // Do nothing if constraints can't be satisfied
+        }
+
+        const lastWindow = columnWindows[columnWindows.length - 1];
+        const newY = lastWindow.frameGeometry.y + lastWindow.frameGeometry.height + stackRowVertMargin;
+
+        reposition(activeClient,
+                   columnGeom.x,
+                   newY,
+                   columnGeom.width,
+                   remainingHeight);
     }
+
+    // Expose methods and properties
+    place.getColumnGeometry = getColumnGeometry;
+    place.recalculateGeometry = recalculateGeometry;
+    place.style = style;
+    place.columns = columns;
+
+    return place;
 }
 
-// function isInPosition(workspace, numberXslots, numberYslots, x, y, xSlotToFill, ySlotToFill) {
-//     var client = workspace.activeWindow;
-//     if (client.moveable) {
-//         arr = getPosition(workspace, client, numberXslots, numberYslots, x, y, xSlotToFill, ySlotToFill);
-//         var newX = arr[0],
-//             newY = arr[1],
-//             w = arr[2],
-//             h = arr[3];
-//         return (client.x == newX && client.y == newY && client.width == w && client.height == h);
-//     }
-//     return false;
-// }
 
-// GRID 3x2
-registerShortcut("MoveWindowToUpLeft3x2", "UltrawideWindows: Move Window to up-left (3x2)", "Meta+Num+7", function () {
-    move(workspace, 3, 2, 0, 0, 1, 1)
+// =============================================================================
+// LAYOUT CONFIGURATIONS
+// =============================================================================
+// Each configuration creates a placement function with specific column widths,
+// margins, and stacking behaviors. Customize these for your monitor setup.
+// 
+// ALL VALUES ARE IN PERCENTAGES:
+// - Horizontal values (horizMarginPct, frameHorizMarginPct) = % of screen WIDTH
+// - Vertical values (vertMarginPct, frameVertMarginPct, etc.) = % of screen HEIGHT
+// =============================================================================
+
+/**
+ * Three-column layout optimized for ultrawide monitors.
+ * - Left column (29%): Secondary content, navigation
+ * - Center column (57%): Primary workspace, code editor
+ * - Right column (12%): Narrow utility column with smart stacking
+ */
+const threeCol = gridLayoutGenerator(3, {
+    horizMarginPct: 1.3,              // ~50px on 3840px width
+    vertMarginPct: 2.6,               // ~50px on 1920px height
+    columnWidthPercentages: [29, 57, 12], // ~1110px, 2180px, 460px on 3840px width
+    enableTakeover: [1, 1, 0],
+    enableRows: [0, 0, 1],
+    rowVertMarginPct: 1.0,            // ~20px on 1920px height
+    minWindowHeightPct: 5.2,          // ~100px on 1920px height
+    frameHorizMarginPct: 0,  
+    frameVertMarginPct: 0,    
+    columnPaddingPct: false
 });
 
-registerShortcut("MoveWindowToUpCenter3x2", "UltrawideWindows: Move Window to up-center (3x2)", "Meta+Num+8", function () {
-    move(workspace, 3, 2, 1, 0, 1, 1)
+const twoColHealthyMargins = gridLayoutGenerator(2, {
+    horizMarginPct: 2.6,              // ~100px on 3840px width
+    vertMarginPct: 5.2,               // ~100px on 1920px height
+    columnWidthPercentages: [60, 40], // ~2300px, 1540px on 3840px width
+    enableTakeover: [1, 1],
+    enableRows: [1, 1],
+    rowVertMarginPct: 1.0,            // ~20px on 1920px height
+    minWindowHeightPct: 5.2,          // ~100px on 1920px height
+    frameHorizMarginPct: 0,  
+    frameVertMarginPct: 0,    
+    columnPaddingPct: false
 });
 
-registerShortcut("MoveWindowToUpRight3x2", "UltrawideWindows: Move Window to up-right (3x2)", "Meta+Num+9", function () {
-    move(workspace, 3, 2, 2, 0, 1, 1)
+const twoColWithRows = gridLayoutGenerator(2, {
+    horizMarginPct: 1.3,              // ~50px on 3840px width
+    vertMarginPct: 2.6,               // ~50px on 1920px height
+    columnWidthPercentages: [50, 50], // ~1920px, 1920px on 3840px width
+    enableTakeover: [1, 1],
+    enableRows: [1, 1],
+    rowVertMarginPct: 1.0,            // ~20px on 1920px height
+    minWindowHeightPct: 5.2,          // ~100px on 1920px height
+    frameHorizMarginPct: 0,  
+    frameVertMarginPct: 0,    
+    columnPaddingPct: false
 });
 
-registerShortcut("MoveWindowToDownLeft3x2", "UltrawideWindows: Move Window to down-left (3x2)", "Meta+Num+1", function () {
-    move(workspace, 3, 2, 0, 1, 1, 1)
+const twoColWithRowsFramed = gridLayoutGenerator(2, {
+    horizMarginPct: 1.3,              // ~50px on 3840px width
+    vertMarginPct: 2.6,               // ~50px on 1920px height
+    columnWidthPercentages: [50, 50], // ~1920px, 1920px on 3840px width
+    enableTakeover: [1, 1],
+    enableRows: [1, 1],
+    rowVertMarginPct: 1.0,            // ~20px on 1920px height
+    minWindowHeightPct: 5.2,          // ~100px on 1920px height
+    frameHorizMarginPct: 13.0,        // ~500px on 3840px width
+    frameVertMarginPct: 10.4,         // ~200px on 1920px height
+    columnPaddingPct: false
 });
 
-registerShortcut("MoveWindowToDownCenter3x2", "UltrawideWindows: Move Window to down-center (3x2)", "Meta+Num+2", function () {
-    move(workspace, 3, 2, 1, 1, 1, 1)
+/**
+ * Framed three-column layout with margins from screen edges.
+ * Creates a centered workspace with generous padding.
+ */
+const framedThreeCol = gridLayoutGenerator(3, {
+    horizMarginPct: 0.65,             // ~25px on 3840px width
+    vertMarginPct: 2.6,               // ~50px on 1920px height
+    columnWidthPercentages: [20, 40, 20], // ~768px, 1536px, 768px on 3840px width
+    enableTakeover: [0, 0, 0],
+    enableRows: [1, 0, 1],
+    rowVertMarginPct: 1.3,            // ~25px on 1920px height
+    minWindowHeightPct: 5.2,          // ~100px on 1920px height
+    frameHorizMarginPct: 7.8,         // ~300px on 3840px width
+    frameVertMarginPct: 10.4,         // ~200px on 1920px height
+    columnPaddingPct: [3.9, 0, 3.9]   // ~75px on 1920px height
 });
 
-registerShortcut("MoveWindowToDownRight3x2", "UltrawideWindows: Move Window to down-right (3x2)", "Meta+Num+3", function () {
-    move(workspace, 3, 2, 2, 1, 1, 1)
+// =============================================================================
+// SCREEN SIZE CHANGE HANDLING
+// =============================================================================
+// Event-driven geometry recalculation when screen configuration changes.
+// Handles docking/undocking laptops, resolution changes, monitor hotplug.
+// =============================================================================
+
+/**
+ * Array of all layout generators that need geometry recalculation on screen changes.
+ */
+const allLayouts = [threeCol, twoColHealthyMargins, twoColWithRows, twoColWithRowsFramed, framedThreeCol];
+
+/**
+ * Recalculate geometry for all layout generators.
+ * Called when virtual screen size changes (dock/undock, resolution change, etc.)
+ */
+function recalculateAllGeometry() {
+    const newSize = workspace.virtualScreenSize;
+    logDebug("Screen size changed to " + newSize.width + "x" + newSize.height + ", recalculating geometry...");
+    
+    // Update global maxArea once
+    updateGlobalMaxArea();
+    
+    // Then update each layout's derived geometry
+    allLayouts.forEach(function(layout) {
+        try {
+            layout.recalculateGeometry();
+        } catch (e) {
+            logDebug("Error recalculating layout geometry: " + e);
+        }
+    });
+    
+    logDebug("Geometry recalculation complete");
+}
+
+// Connect to the virtualScreenSizeChanged signal to handle screen configuration changes
+workspace.virtualScreenSizeChanged.connect(recalculateAllGeometry);
+
+// =============================================================================
+// KEYBOARD SHORTCUTS
+// =============================================================================
+// All shortcuts use the "FractalGrid:" prefix for discoverability in KDE settings.
+// Customize key bindings in System Settings > Shortcuts > KWin
+// =============================================================================
+
+// --- Framed Three-Column Layout (Ctrl+Alt+Meta + D/B/H) ---
+registerShortcut("ThreeColFramedLeft", "FractalGrid: ThreeCol Framed Place Left", "Ctrl+Alt+Meta+D", function () {
+    framedThreeCol(0);
 });
 
-registerShortcut("MoveWindowToLeftHeight3x2", "UltrawideWindows: Move Window to left-height (3x2)", "Meta+Num+4", function () {
-    move(workspace, 3, 1, 0, 0, 1, 1)
+registerShortcut("ThreeColFramedCenter", "FractalGrid: ThreeCol Framed Place Center", "Ctrl+Alt+Meta+B", function () {
+    framedThreeCol(1);
 });
 
-registerShortcut("MoveWindowToCenterHeight3x2", "UltrawideWindows: Move Window to center-height (3x2)", "Meta+Num+5", function () {
-    move(workspace, 3, 1, 1, 0, 1, 1)
+registerShortcut("ThreeColFramedRight", "FractalGrid: ThreeCol Framed Place Right", "Ctrl+Alt+Meta+H", function () {
+    framedThreeCol(2);
 });
 
-registerShortcut("MoveWindowToRightHeight3x2", "UltrawideWindows: Move Window to right-height (3x2)", "Meta+Num+6", function () {
-    move(workspace, 3, 1, 2, 0, 1, 1)
+// --- Standard Three-Column Layout (Ctrl+Alt+Meta + E/C/T/R) ---
+registerShortcut("ThreeColLeft", "FractalGrid: ThreeCol Place Left", "Ctrl+Alt+Meta+E", function () {
+    threeCol(0);
 });
 
-// GRID 2x2
-
-registerShortcut("MoveWindowToUpLeft2x2", "UltrawideWindows: Move Window to up-left (2x2)", "ctrl+Num+7", function () {
-    move(workspace, 2, 2, 0, 0, 1, 1)
+registerShortcut("ThreeColCenter", "FractalGrid: ThreeCol Place Center", "Ctrl+Alt+Meta+C", function () {
+    threeCol(1);
 });
 
-registerShortcut("MoveWindowToUpCenter2x2", "UltrawideWindows: Move Window to up-width (2x2)", "ctrl+Num+8", function () {
-    move(workspace, 1, 2, 0, 0, 1, 1)
+registerShortcut("ThreeColRight", "FractalGrid: ThreeCol Place Right", "Ctrl+Alt+Meta+T", function () {
+    threeCol(2);
 });
 
-registerShortcut("MoveWindowToUpRight2x2", "UltrawideWindows: Move Window to up-right (2x2)", "ctrl+Num+9", function () {
-    move(workspace, 2, 2, 1, 0, 1, 1)
+registerShortcut("ThreeColCenterTakeover", "FractalGrid: ThreeCol Center Takeover", "Ctrl+Alt+Meta+J", function () {
+    threeCol(1, { takeover: true });
 });
 
-registerShortcut("MoveWindowToDownLeft2x2", "UltrawideWindows: Move Window to down-left (2x2)", "ctrl+Num+1", function () {
-    move(workspace, 2, 2, 0, 1, 1, 1)
+// --- Two-Column Framed Layout (Ctrl+Alt+Meta + M/K) ---
+registerShortcut("TwoColFramedLeft", "FractalGrid: Two Column With Rows Left", "Ctrl+Alt+Meta+M", function () {
+    twoColWithRowsFramed(0);
 });
 
-registerShortcut("MoveWindowToDownCenter2x2", "UltrawideWindows: Move Window to down-width (2x2)", "ctrl+Num+2", function () {
-    move(workspace, 1, 2, 0, 1, 1, 1)
+registerShortcut("TwoColFramedRight", "FractalGrid: Two Column With Rows Right", "Ctrl+Alt+Meta+K", function () {
+    twoColWithRowsFramed(1);
 });
 
-registerShortcut("MoveWindowToDownRight2x2", "UltrawideWindows: Move Window to down-right (2x2)", "ctrl+Num+3", function () {
-    move(workspace, 2, 2, 1, 1, 1, 1)
+// --- Two-Column Healthy Margins Layout (Ctrl+Alt+Meta + ,/L) ---
+registerShortcut("TwoColHealthyMarginsLeft", "FractalGrid: Two Column Healthy Margins Left", "Ctrl+Alt+Meta+,", function () {
+    twoColHealthyMargins(0);
 });
 
-registerShortcut("MoveWindowToLeftHeight2x2", "UltrawideWindows: Move Window to left-height (2x2)", "ctrl+Num+4", function () {
-    move(workspace, 2, 1, 0, 0, 1, 1)
+registerShortcut("TwoColHealthyMarginsRight", "FractalGrid: Two Column Healthy Margins Right", "Ctrl+Alt+Meta+L", function () {
+    twoColHealthyMargins(1);
 });
 
-registerShortcut("MoveWindowToRightHeight2x2", "UltrawideWindows: Move Window to right-height (2x2)", "ctrl+Num+6", function () {
-    move(workspace, 2, 1, 1, 0, 1, 1)
-});
-
-
-// GRID 4x2 center biased (lateral windows fit accordingly to ctrl-X shortcuts)
-registerShortcut("MoveWindowToUpLeft4x2_centerbiased", "UltrawideWindows: Move Window to up-left (4x2 center biased)", "Ctrl+Meta+Num+7", function () {
-    move(workspace, 4, 2, 0, 0, 1, 1)
-});
-
-registerShortcut("MoveWindowToUpCenter4x2_centerbiased", "UltrawideWindows: Move Window to up-center (4x2 center biased)", "Ctrl+Meta+Num+8", function () {
-    move(workspace, 4, 2, 1, 0, 2, 1)
-});
-
-registerShortcut("MoveWindowToUpRight4x2_centerbiased", "UltrawideWindows: Move Window to up-right (4x2 center biased)", "Ctrl+Meta+Num+9", function () {
-    move(workspace, 4, 2, 3, 0, 1, 1)
-});
-
-registerShortcut("MoveWindowToDownLeft4x2_centerbiased", "UltrawideWindows: Move Window to down-left (4x2 center biased)", "Ctrl+Meta+Num+1", function () {
-    move(workspace, 4, 2, 0, 1, 1, 1)
-});
-
-registerShortcut("MoveWindowToDownCenter4x2_centerbiased", "UltrawideWindows: Move Window to down-center (4x2 center biased)", "Ctrl+Meta+Num+2", function () {
-    move(workspace, 4, 2, 1, 1, 2, 1)
-});
-
-registerShortcut("MoveWindowToDownRight4x2_centerbiased", "UltrawideWindows: Move Window to down-right (4x2 center biased)", "Ctrl+Meta+Num+3", function () {
-    move(workspace, 4, 2, 3, 1, 1, 1)
-});
-
-registerShortcut("MoveWindowToLeftHeight4x2_centerbiased", "UltrawideWindows: Move Window to left-height (4x2 center biased)", "Ctrl+Meta+Num+4", function () {
-    move(workspace, 4, 1, 0, 0, 1, 1)
-});
-
-registerShortcut("MoveWindowToCenterLeftHeight4x2_centerbiased", "UltrawideWindows: Move Window to center-left-height (4x2 center biased)", "Ctrl+Meta+Shift+Num+4", function () {
-    move(workspace, 4, 1, 1, 0, 1, 1)
-});
-
-registerShortcut("MoveWindowToCenterHeight4x2_centerbiased", "UltrawideWindows: Move Window to center-height (4x2 center biased)", "Ctrl+Meta+Num+5", function () {
-    move(workspace, 4, 1, 1, 0, 2, 1)
-});
-
-registerShortcut("MoveWindowToCenterRightHeight4x2_centerbiased", "UltrawideWindows: Move Window to center-right-height (4x2 center biased)", "Ctrl+Meta+Shift+Num+6", function () {
-    move(workspace, 4, 1, 2, 0, 1, 1)
-});
-
-registerShortcut("MoveWindowToRightHeight4x2_centerbiased", "UltrawideWindows: Move Window to right-height (4x2 center biased)", "Ctrl+Meta+Num+6", function () {
-    move(workspace, 4, 1, 3, 0, 1, 1)
-});
-
-
-// Fit 2/3 screen
-registerShortcut("MoveWindowToUpLeft23", "UltrawideWindows: Move Window to fit up-left 2/3 width ", "alt+Num+7", function () {
-    move(workspace, 3, 2, 0, 0, 2, 1)
-});
-
-registerShortcut("MoveWindowToUpCenter23", "UltrawideWindows: Move Window to up-width 2/3", "alt+Num+8", function () {
-    move(workspace, 1, 2, 0, 0, 1, 1)
-});
-
-registerShortcut("MoveWindowToUpRight23", "UltrawideWindows: Move Window to fit up-right 2/3 width ", "alt+Num+9", function () {
-    move(workspace, 3, 2, 1, 0, 2, 1)
-});
-
-registerShortcut("MoveWindowToFitDownLeft23", "UltrawideWindows: Move Window to fit down-left 2/3 width ", "alt+Num+1", function () {
-    move(workspace, 3, 2, 0, 1, 2, 1)
-});
-
-registerShortcut("MoveWindowToDownCenter23", "UltrawideWindows: Move Window to down-width 2/3", "alt+Num+2", function () {
-    move(workspace, 1, 2, 0, 1, 1, 1)
-});
-
-registerShortcut("MoveWindowToFitDownRight23", "UltrawideWindows: Move Window to fit down-right 2/3 width ", "alt+Num+3", function () {
-    move(workspace, 3, 2, 1, 1, 2, 1)
-});
-
-registerShortcut("MoveWindowToLeftHeight23", "UltrawideWindows: Move Window to fit left-height 2/3 width ", "alt+Num+4", function () {
-    move(workspace, 3, 1, 0, 0, 2, 1)
-});
-
-registerShortcut("MoveWindowToRightHeight23", "UltrawideWindows: Move Window to fit right-height 2/3 width ", "alt+Num+6", function () {
-    move(workspace, 3, 1, 1, 0, 2, 1)
-});
-
-
-// Fit 2/3 screen center biased (lateral windows fit accordingly to alt-X shortcuts)
-registerShortcut("MoveWindowToUpLeft23_center_biased", "UltrawideWindows: Move Window to fit up-left 2/3 width (center biased)", "alt+meta+Num+7", function () {
-    move(workspace, 6, 2, 0, 0, 1, 1)
-});
-
-registerShortcut("MoveWindowToUpCenter23_center_biased", "UltrawideWindows: Move Window to up-center 2/3 (center biased)", "alt+meta+Num+8", function () {
-    move(workspace, 6, 2, 1, 0, 4, 1)
-});
-
-registerShortcut("MoveWindowToUpRight23_center_biased", "UltrawideWindows: Move Window to fit up-right 2/3 width (center biased)", "alt+meta+Num+9", function () {
-    move(workspace, 6, 2, 5, 0, 1, 1)
-});
-
-registerShortcut("MoveWindowToFitDownLeft23_center_biased", "UltrawideWindows: Move Window to fit down-left 2/3 width (center biased)", "alt+meta+Num+1", function () {
-    move(workspace, 6, 2, 0, 1, 1, 1)
-});
-
-registerShortcut("MoveWindowToDownCenter23_center_biased", "UltrawideWindows: Move Window to down-center 2/3 (center biased)", "alt+meta+Num+2", function () {
-    move(workspace, 6, 2, 1, 1, 4, 1)
-});
-
-registerShortcut("MoveWindowToFitDownRight23_center_biased", "UltrawideWindows: Move Window to fit down-right 2/3 width (center biased)", "alt+meta+Num+3", function () {
-    move(workspace, 6, 2, 5, 1, 1, 1)
-});
-
-registerShortcut("MoveWindowToLeftHeight23_center_biased", "UltrawideWindows: Move Window to fit left-height 2/3 width (center biased)", "alt+meta+Num+4", function () {
-    move(workspace, 6, 1, 0, 0, 1, 1)
-});
-
-registerShortcut("MoveWindowToCenterHeight23_center_biased", "UltrawideWindows: Move Window to fit center-height 2/3 width (center biased)", "alt+meta+Num+5", function () {
-    move(workspace, 6, 1, 1, 0, 4, 1)
-});
-
-registerShortcut("MoveWindowToRightHeight23_center_biased", "UltrawideWindows: Move Window to fit right-height 2/3 width (center biased)", "alt+meta+Num+6", function () {
-    move(workspace, 6, 1, 5, 0, 1, 1)
-});
-
-// General
-registerShortcut("MoveWindowToMaximize", "UltrawideWindows: Maximize Window", "Meta+Num+0", function () {
-    var client = workspace.activeWindow;
-    client.setMaximize(true,true)
-});
-
-registerShortcut("MoveWindowToMaximize1", "UltrawideWindows: Maximize Window (copy)", "alt+Num+0", function () {
-    move(workspace, 1, 1, 0, 0, 1, 1)
-});
-
-registerShortcut("MoveWindowToMaximize2", "UltrawideWindows: Maximize Window (copy2)", "ctrl+Num+0", function () {
-    move(workspace, 1, 1, 0, 0, 1, 1)
-});
-
-registerShortcut("MoveWindowToMaximize3", "UltrawideWindows: Maximize Window (copy2)", "ctrl+meta+Num+0", function () {
-    move(workspace, 1, 1, 0, 0, 1, 1)
-});
-
-registerShortcut("MoveWindowToMaximize4", "UltrawideWindows: Maximize Window (copy2)", "alt+meta+Num+0", function () {
-    move(workspace, 1, 1, 0, 0, 1, 1)
-});
-
-registerShortcut("MoveWindowToCenter", "UltrawideWindows: Center Window", "ctrl+Num+5", function () {
-    center(workspace)
-});
-
-registerShortcut("MoveWindowToCenter1", "UltrawideWindows: Center Window (copy)", "alt+Num+5", function () {
-    center(workspace)
-});
-
-registerShortcut("IncreaseWindowSize", "UltrawideWindows: Increase the window size in place", "Ctrl+Meta+Num++", function () {
-    resize(workspace, "grow", 20, 0);
-});
-
-registerShortcut("DecreaseWindowSize", "UltrawideWindows: Decrease the window size in place", "Ctrl+Meta+Num+-", function () {
-    resize(workspace, "shrink", 20, 300);
-});
-
-registerShortcut("MoveWindowLeft", "UltrawideWindows: Move the window to the left", "Ctrl+Meta+Left", function () {
-    moveWithFixedSize(workspace, "left", 20);
-});
-
-registerShortcut("MoveWindowRight", "UltrawideWindows: Move the window to the right", "Ctrl+Meta+Right", function () {
-    moveWithFixedSize(workspace, "right", 20);
-});
-
-registerShortcut("MoveWindowUp", "UltrawideWindows: Move the window up", "Ctrl+Meta+Up", function () {
-    moveWithFixedSize(workspace, "up", 20);
-});
-
-registerShortcut("MoveWindowDown", "UltrawideWindows: Move the window down", "Ctrl+Meta+Down", function () {
-    moveWithFixedSize(workspace, "down", 20);
-});
