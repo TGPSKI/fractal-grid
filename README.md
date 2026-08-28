@@ -33,6 +33,21 @@ a new monitor setup is added as data, not code.
 - KDE Plasma 6 (KWin Scripting API)
 - `kpackagetool6`, `kwriteconfig6`, `qdbus6`
 
+## Agent-driven setup and configuration
+
+fractal-grid ships three agent skills, so an AI coding agent can take a fresh
+clone to a configured install — and change layouts and shortcuts — without
+editing files by hand:
+
+| skill | what it does |
+|---|---|
+| [`fractal-grid-install`](.agents/skills/fractal-grid-install/SKILL.md) | guided install, upgrade, or removal |
+| [`fractal-grid-layout`](.agents/skills/fractal-grid-layout/SKILL.md) | create or tune a column layout |
+| [`fractal-grid-shortcuts`](.agents/skills/fractal-grid-shortcuts/SKILL.md) | add or rebind keyboard shortcuts |
+
+Each skill reads the constraints in `AGENTS.md` and ends by running `make
+check`.
+
 ## Install
 
 ```sh
