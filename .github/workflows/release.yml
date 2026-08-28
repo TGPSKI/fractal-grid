@@ -42,7 +42,7 @@ jobs:
 
           NOTES=$(awk -v ver="${TAG#v}" '
             $0 ~ "^## \\[" ver "\\]" { capture=1; next }
-            capture && /^## \\[/  { exit }
+            capture && /^## \[/  { exit }
             capture                   { print }
           ' CHANGELOG.md)
 
