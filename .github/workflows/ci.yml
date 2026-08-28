@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # A KWin script has no compiled artifacts and nothing platform-specific to
+  # exercise, so the scaffold's cross-platform `full-scope` matrix is omitted.
+  ci:
+    name: Build & Test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        # actions/checkout v6.0.2 (Node.js 24)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Validate package metadata
+        run: python3 -m json.tool metadata.json > /dev/null
+
+      - name: Check script syntax
+        run: node --check contents/code/main.js
+
+      - name: Check shell scripts
+        run: sh -n scripts/common scripts/install.sh scripts/update.sh scripts/uninstall.sh scripts/release.sh scripts/debug.sh
+
+      - name: Package
+        run: make build
+
+      - name: Verify package contents
+        run: unzip -l fractal-grid.kwinscript

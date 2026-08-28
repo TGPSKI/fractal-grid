@@ -1,3 +1,18 @@
+# KDE / KWin
 **/.directory
 *.kwinscript
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 *.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local tooling
+.qwen/
